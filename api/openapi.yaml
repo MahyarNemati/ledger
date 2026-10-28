@@ -1,0 +1,484 @@
+openapi: 3.1.0
+info:
+  title: Ledger API
+  version: 1.0.0
+  description: |
+    Double-entry ledger built on an event-sourced core.
+
+    All amounts are integers in the currency's minor unit (cents for USD,
+    yen for JPY, fils for KWD). Every mutating call requires an
+    `Idempotency-Key` header. Retrying with the same key and body returns the
+    original response with `Idempotent-Replayed: true`; reusing a key with a
+    different body is rejected.
+  license:
+    name: MIT
+servers:
+  - url: http://localhost:8080
+tags:
+  - name: accounts
+  - name: entries
+  - name: holds
+  - name: ops
+
+paths:
+  /healthz:
+    get:
+      tags: [ops]
+      summary: Liveness probe
+      responses:
+        "200": { description: Process is up }
+  /readyz:
+    get:
+      tags: [ops]
+      summary: Readiness probe (checks the database)
+      responses:
+        "200": { description: Ready }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/accounts:
+    post:
+      tags: [accounts]
+      summary: Open an account
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OpenAccountRequest" }
+      responses:
+        "201":
+          description: Account opened
+          content: { application/json: { schema: { $ref: "#/components/schemas/Account" } } }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/accounts/{id}:
+    get:
+      tags: [accounts]
+      summary: Get an account (strongly consistent, rebuilt from events)
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200":
+          description: Account
+          content: { application/json: { schema: { $ref: "#/components/schemas/Account" } } }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/accounts/{id}/close:
+    post:
+      tags: [accounts]
+      summary: Close an account with a zero balance and no pending holds
+      parameters:
+        - { $ref: "#/components/parameters/ID" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "200":
+          description: Account closed
+          content: { application/json: { schema: { $ref: "#/components/schemas/Account" } } }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/accounts/{id}/balance:
+    get:
+      tags: [accounts]
+      summary: Projected balance (eventually consistent)
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200":
+          description: Balance read model
+          content: { application/json: { schema: { $ref: "#/components/schemas/ProjectedBalance" } } }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/accounts/{id}/statement:
+    get:
+      tags: [accounts]
+      summary: Account statement with running balance
+      parameters:
+        - { $ref: "#/components/parameters/ID" }
+        - name: cursor
+          in: query
+          description: Return lines after this global position (from next_cursor).
+          schema: { type: integer, format: int64, minimum: 0 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+      responses:
+        "200":
+          description: Statement page
+          content: { application/json: { schema: { $ref: "#/components/schemas/Statement" } } }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/entries:
+    post:
+      tags: [entries]
+      summary: Post a balanced journal entry
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PostEntryRequest" }
+      responses:
+        "201":
+          description: Entry posted
+          content: { application/json: { schema: { $ref: "#/components/schemas/Entry" } } }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/entries/{id}:
+    get:
+      tags: [entries]
+      summary: Get a journal entry
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200":
+          description: Entry
+          content: { application/json: { schema: { $ref: "#/components/schemas/Entry" } } }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/entries/{id}/reverse:
+    post:
+      tags: [entries]
+      summary: Post the mirror image of an entry. The original is never modified.
+      parameters:
+        - { $ref: "#/components/parameters/ID" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        "201":
+          description: Reversal entry
+          content: { application/json: { schema: { $ref: "#/components/schemas/Entry" } } }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/transfers:
+    post:
+      tags: [entries]
+      summary: Two-line entry between two accounts
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TransferRequest" }
+      responses:
+        "201":
+          description: Entry posted
+          content: { application/json: { schema: { $ref: "#/components/schemas/Entry" } } }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/holds:
+    post:
+      tags: [holds]
+      summary: Authorize a pending transfer and reserve funds
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlaceHoldRequest" }
+      responses:
+        "201":
+          description: Hold placed
+          content: { application/json: { schema: { $ref: "#/components/schemas/Hold" } } }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/holds/{id}:
+    get:
+      tags: [holds]
+      summary: Get a hold
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200":
+          description: Hold
+          content: { application/json: { schema: { $ref: "#/components/schemas/Hold" } } }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/holds/{id}/capture:
+    post:
+      tags: [holds]
+      summary: Capture all or part of a pending hold; the remainder is released
+      parameters:
+        - { $ref: "#/components/parameters/ID" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                amount:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                  description: Amount to capture. 0 or omitted captures the full hold.
+      responses:
+        "200":
+          description: Hold captured
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [hold, entry]
+                properties:
+                  hold: { $ref: "#/components/schemas/Hold" }
+                  entry: { $ref: "#/components/schemas/Entry" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/holds/{id}/void:
+    post:
+      tags: [holds]
+      summary: Release a pending (or expired) hold without moving money
+      parameters:
+        - { $ref: "#/components/parameters/ID" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                reason: { type: string }
+      responses:
+        "200":
+          description: Hold voided
+          content: { application/json: { schema: { $ref: "#/components/schemas/Hold" } } }
+        default: { $ref: "#/components/responses/Error" }
+
+components:
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Client-chosen key, unique per logical operation. 1 to 255 characters.
+      schema: { type: string, minLength: 1, maxLength: 255 }
+
+  responses:
+    Error:
+      description: Structured error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    AccountType:
+      type: string
+      enum: [asset, liability, equity, revenue, expense]
+    Side:
+      type: string
+      enum: [debit, credit]
+    Currency:
+      type: string
+      enum: [CAD, CHF, EUR, GBP, JPY, KWD, USD]
+    MinorUnits:
+      type: integer
+      format: int64
+      minimum: 1
+
+    OpenAccountRequest:
+      type: object
+      additionalProperties: false
+      required: [name, type, currency]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        type: { $ref: "#/components/schemas/AccountType" }
+        currency: { $ref: "#/components/schemas/Currency" }
+        allow_overdraft:
+          type: boolean
+          default: false
+          description: When true the account may go below zero without limit.
+        overdraft_limit:
+          type: integer
+          format: int64
+          minimum: 0
+          default: 0
+          description: How far below zero the account may go when allow_overdraft is false.
+
+    Account:
+      type: object
+      required: [id, name, type, currency, status, balance, available, debits, credits, version]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        type: { $ref: "#/components/schemas/AccountType" }
+        currency: { $ref: "#/components/schemas/Currency" }
+        status: { type: string, enum: [open, closed] }
+        balance:
+          type: integer
+          format: int64
+          description: Posted balance on the account's normal side.
+        balance_decimal: { type: string, examples: ["12.34"] }
+        available:
+          type: integer
+          format: int64
+          description: Balance minus live holds that would reduce it.
+        debits: { type: integer, format: int64 }
+        credits: { type: integer, format: int64 }
+        pending_debits: { type: integer, format: int64 }
+        pending_credits: { type: integer, format: int64 }
+        allow_overdraft: { type: boolean }
+        overdraft_limit: { type: integer, format: int64 }
+        version: { type: integer, format: int64, description: Event stream version. }
+        opened_at: { type: string, format: date-time }
+
+    ProjectedBalance:
+      type: object
+      properties:
+        account_id: { type: string, format: uuid }
+        type: { $ref: "#/components/schemas/AccountType" }
+        currency: { $ref: "#/components/schemas/Currency" }
+        balance: { type: integer, format: int64 }
+        debits: { type: integer, format: int64 }
+        credits: { type: integer, format: int64 }
+        pending_debits: { type: integer, format: int64 }
+        pending_credits: { type: integer, format: int64 }
+        position:
+          type: integer
+          format: int64
+          description: Global log position the read model reflects.
+
+    Statement:
+      type: object
+      required: [account_id, lines]
+      properties:
+        account_id: { type: string, format: uuid }
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              position: { type: integer, format: int64 }
+              entry_id: { type: string, format: uuid }
+              side: { $ref: "#/components/schemas/Side" }
+              amount: { type: integer, format: int64 }
+              balance_after: { type: integer, format: int64 }
+              description: { type: string }
+              posted_at: { type: string, format: date-time }
+        next_cursor: { type: integer, format: int64 }
+
+    Line:
+      type: object
+      additionalProperties: false
+      required: [account_id, side, amount]
+      properties:
+        account_id: { type: string, format: uuid }
+        side: { $ref: "#/components/schemas/Side" }
+        amount: { $ref: "#/components/schemas/MinorUnits" }
+
+    PostEntryRequest:
+      type: object
+      additionalProperties: false
+      required: [currency, lines]
+      properties:
+        currency: { $ref: "#/components/schemas/Currency" }
+        description: { type: string, maxLength: 500 }
+        lines:
+          type: array
+          minItems: 2
+          maxItems: 64
+          description: Debits must equal credits. Each account may appear once.
+          items: { $ref: "#/components/schemas/Line" }
+
+    TransferRequest:
+      type: object
+      additionalProperties: false
+      required: [debit_account_id, credit_account_id, amount, currency]
+      properties:
+        debit_account_id: { type: string, format: uuid }
+        credit_account_id: { type: string, format: uuid }
+        amount: { $ref: "#/components/schemas/MinorUnits" }
+        currency: { $ref: "#/components/schemas/Currency" }
+        description: { type: string, maxLength: 500 }
+
+    Entry:
+      type: object
+      required: [id, kind, currency, lines, posted_at]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [journal, transfer, capture, reversal] }
+        currency: { $ref: "#/components/schemas/Currency" }
+        description: { type: string }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/Line" }
+        reverses: { type: string, format: uuid }
+        reversed_by: { type: string, format: uuid }
+        hold_id: { type: string, format: uuid }
+        posted_at: { type: string, format: date-time }
+
+    PlaceHoldRequest:
+      type: object
+      additionalProperties: false
+      required: [debit_account_id, credit_account_id, amount, currency]
+      properties:
+        debit_account_id: { type: string, format: uuid }
+        credit_account_id: { type: string, format: uuid }
+        amount: { $ref: "#/components/schemas/MinorUnits" }
+        currency: { $ref: "#/components/schemas/Currency" }
+        description: { type: string }
+        expires_at: { type: string, format: date-time }
+        ttl_seconds:
+          type: integer
+          minimum: 1
+          description: Used when expires_at is omitted. Maximum 30 days.
+
+    Hold:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        debit_account_id: { type: string, format: uuid }
+        credit_account_id: { type: string, format: uuid }
+        currency: { $ref: "#/components/schemas/Currency" }
+        amount: { type: integer, format: int64 }
+        description: { type: string }
+        status: { type: string, enum: [pending, captured, voided] }
+        expired: { type: boolean }
+        captured_amount: { type: integer, format: int64 }
+        entry_id: { type: string, format: uuid }
+        expires_at: { type: string, format: date-time }
+        placed_at: { type: string, format: date-time }
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - malformed_request
+                - unsupported_media_type
+                - request_too_large
+                - idempotency_key_required
+                - idempotency_key_reused
+                - request_in_progress
+                - validation_failed
+                - not_found
+                - already_exists
+                - conflict
+                - insufficient_funds
+                - unbalanced_entry
+                - currency_mismatch
+                - account_closed
+                - account_not_empty
+                - already_reversed
+                - not_reversible
+                - hold_not_pending
+                - hold_expired
+                - service_unavailable
+                - internal
+            message: { type: string }
+            request_id: { type: string }
