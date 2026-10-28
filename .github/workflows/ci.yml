@@ -60,7 +60,10 @@ jobs:
       - name: Invariants with more generated cases
         env:
           CGO_ENABLED: 1
-        run: go test -race -count=1 -rapid.checks=2000 ./internal/ledger/...
+        # The flag belongs to the rapid package, not to `go test`, so it must
+        # come AFTER the package pattern. Before it, `go test` stops parsing
+        # and tries to test the root package, which has no Go files.
+        run: go test -race -count=1 ./internal/ledger/... -rapid.checks=2000
 
   integration:
     name: postgres + kafka integration
