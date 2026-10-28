@@ -281,3 +281,40 @@ func TestSnapshotsRoundTripOnPostgres(t *testing.T) {
 			replayed.Debits, replayed.Credits, replayed.Version())
 	}
 }
+
+func TestInboxDedupesConcurrentRedelivery(t *testing.T) {
+	ctx := context.Background()
+	store := postgres.NewActivityStore(pgtest.Pool(t))
+	msg, account, entry := uuid.New(), uuid.New(), uuid.New()
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	applied := 0
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := store.ApplyPosting(ctx, "activity", msg, account, entry)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if ok {
+				mu.Lock()
+				applied++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if applied != 1 {
+		t.Fatalf("message applied %d times", applied)
+	}
+	act, err := store.Activity(ctx, account)
+	if err != nil || act.Postings != 1 || act.LastEntry != entry {
+		t.Fatalf("activity = %+v, %v", act, err)
+	}
+	if ok, _ := store.ApplyPosting(ctx, "other-consumer", msg, account, entry); !ok {
+		t.Fatal("inbox must be scoped per consumer")
+	}
+}
