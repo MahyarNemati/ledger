@@ -1,8 +1,10 @@
-/bin/
-/dist/
-*.test
 *.out
-coverage.*
+*.test
+.DS_Store
 .env
 .idea/
 .vscode/
+/bin/
+/dist/
+coverage.*
+coverage.out
