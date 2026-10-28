@@ -231,11 +231,16 @@ is what makes the unit suite fast.
 ## Development
 
 ```bash
-make test               # unit + invariants, race detector on
+make test               # unit + invariants
+make test-race          # the same with the race detector (needs working cgo)
 make up                 # Postgres + Kafka + all three processes
 make test-integration   # the Postgres and Kafka suites
 make lint
 ```
+
+The race detector requires cgo, so it is a separate target rather than the
+default; CI runs it on Linux. Release builds set `CGO_ENABLED=0` for a static
+binary.
 
 The in-memory and Postgres adapters are held to **one shared suite**
 (`internal/*/storetest`), so the fast fakes the unit tests use are proven to

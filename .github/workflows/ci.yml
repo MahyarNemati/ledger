@@ -13,8 +13,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CGO_ENABLED: 0
+# NOTE: CGO_ENABLED is deliberately NOT forced to 0 here. The race detector
+# requires cgo, and the Linux runners have a working toolchain. Static builds
+# set CGO_ENABLED=0 per-step instead.
 
 jobs:
   test:
@@ -41,6 +42,8 @@ jobs:
       - run: go vet ./...
       - run: go build ./...
       - name: Test (race)
+        env:
+          CGO_ENABLED: 1   # the race detector needs cgo
         run: go test -race -count=1 ./...
 
   invariants:
@@ -55,6 +58,8 @@ jobs:
       # For money, "I tested the cases I thought of" is not an answer, so the
       # invariant suite gets extra generated sequences here.
       - name: Invariants with more generated cases
+        env:
+          CGO_ENABLED: 1
         run: go test -race -count=1 -rapid.checks=2000 ./internal/ledger/...
 
   integration:
@@ -106,11 +111,12 @@ jobs:
       # The in-memory stores and the Postgres ones share one storetest suite,
       # so this proves the real adapters agree with the fakes the unit tests use.
       - name: Integration tests
+        # The -tags=integration guard is what these files are behind; without
+        # it they compile out and the job passes while testing nothing.
         env:
           LEDGER_TEST_DATABASE_URL: "postgres://ledger:ledger@localhost:5432/ledger?sslmode=disable"
           LEDGER_TEST_KAFKA_BROKERS: "localhost:9092"
-        # The -tags=integration guard is what these files are behind; without
-        # it they compile out and the job passes while testing nothing.
+          CGO_ENABLED: 1
         run: go test -race -count=1 -tags=integration ./internal/postgres/... ./internal/kafka/...
 
       - name: Kafka logs on failure
