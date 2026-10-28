@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -122,15 +123,19 @@ func Run(t *testing.T, newStore Factory) {
 				t.Fatal(err)
 			}
 		}
+		// Some stores hold back the tail of the log while unrelated
+		// transactions are in flight, so poll briefly for the full set.
 		var all []eventstore.Event
 		after := start
-		for {
+		deadline := time.Now().Add(5 * time.Second)
+		for len(all) < 9 && time.Now().Before(deadline) {
 			page, err := s.ReadAll(ctx, after, 4)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if len(page) == 0 {
-				break
+				time.Sleep(10 * time.Millisecond)
+				continue
 			}
 			all = append(all, page...)
 			after = page[len(page)-1].GlobalPosition
