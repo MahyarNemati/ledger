@@ -11,23 +11,6 @@ updates:
       # their own.
       patch:
         update-types: [patch]
-    ignore:
-      # github.com/docker/docker reaches this module through
-      # testcontainers-go, which is used only by internal/postgres/pgtest to
-      # start a throwaway Postgres and Kafka for the integration tests. It is
-      # not in any shipped binary — `go mod why` shows the single path, and
-      # `govulncheck` (which asks whether the vulnerable *symbol* is
-      # reachable, not merely whether the version matches) reports clean.
-      #
-      # The open advisories against it also have no patched version, so a
-      # Dependabot security update has nothing to update to and the job fails
-      # every run. Ignored with the reasoning written down rather than left to
-      # generate noise.
-      #
-      # Revisit when testcontainers-go moves to a docker client release that
-      # carries the fixes, or when a patched version appears.
-      - dependency-name: github.com/docker/docker
-
   - package-ecosystem: github-actions
     directory: /
     schedule:
