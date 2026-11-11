@@ -9,7 +9,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/redpanda v0.44.0
 	github.com/twmb/franz-go v1.20.6
-	golang.org/x/sync v0.24.0
+	golang.org/x/sync v0.25.0
 	pgregory.net/rapid v1.3.0
 )
 
